@@ -3,6 +3,8 @@ import numpy as np
 import zipfile
 import tempfile
 import os
+import tensorflow as tf
+import keras
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 from PIL import Image
@@ -31,7 +33,7 @@ st.set_page_config(
 @st.cache_resource
 def load_trained_model():
     """
-    Load the trained model from NEWMODEL.zip file
+    Load the trained model from NEWMODEL.zip file (TensorFlow SavedModel format)
     """
     try:
         # Check if zip file exists
@@ -39,55 +41,62 @@ def load_trained_model():
             st.error("❌ NEWMODEL.zip file not found! Please ensure the model file is in the same directory.")
             return None
         
-        # Try loading as TensorFlow SavedModel first (Keras 3 format)
-        try:
-            import keras
-            # Use TFSMLayer for TensorFlow SavedModel format
-            model = keras.layers.TFSMLayer("NEWMODEL.zip", call_endpoint='serving_default')
-            st.success("✅ Loaded as TensorFlow SavedModel (TFSMLayer)")
-            return model
-        except Exception as tfsm_error:
-            st.write(f"TFSMLayer failed: {tfsm_error}")
-            
-            # Try direct load_model (for older formats)
-            try:
-                model = load_model("NEWMODEL.zip")
-                st.success("✅ Loaded with load_model")
-                return model
-            except Exception as load_error:
-                st.write(f"load_model failed: {load_error}")
-                
-                # Try extracting and loading H5 file
-                try:
-                    with zipfile.ZipFile("NEWMODEL.zip", 'r') as zip_ref:
-                        file_list = zip_ref.namelist()
-                        
-                        # Find H5 files
-                        h5_files = [f for f in file_list if f.endswith('.h5')]
-                        
-                        if h5_files:
-                            h5_file = h5_files[0]
-                            
-                            with tempfile.TemporaryDirectory() as temp_dir:
-                                zip_ref.extract(h5_file, temp_dir)
-                                h5_path = os.path.join(temp_dir, h5_file)
-                                
-                                model = load_model(h5_path)
-                                st.success("✅ Loaded extracted H5 file")
-                                return model
-                        else:
-                            raise Exception("No H5 files found in zip")
-                            
-                except Exception as h5_error:
-                    st.error(f"❌ All loading methods failed:")
-                    st.error(f"- TFSMLayer: {tfsm_error}")
-                    st.error(f"- load_model: {load_error}")
-                    st.error(f"- H5 extraction: {h5_error}")
-                    return None
-                
+        st.info("🔄 Loading TensorFlow SavedModel...")
+        
+        # Use TFSMLayer for TensorFlow SavedModel format as recommended in the error
+        tfsm_layer = keras.layers.TFSMLayer("NEWMODEL.zip", call_endpoint='serving_default')
+        
+        # Create a functional model wrapper
+        input_shape = (224, 224, 3)  # Based on your IMG_SIZE
+        inputs = keras.Input(shape=input_shape)
+        outputs = tfsm_layer(inputs)
+        model = keras.Model(inputs=inputs, outputs=outputs)
+        
+        st.success("✅ TensorFlow SavedModel loaded successfully!")
+        return model
+        
     except Exception as e:
-        st.error(f"❌ Unexpected error loading model: {str(e)}")
-        return None
+        st.error(f"❌ Error loading model: {str(e)}")
+        
+        # Try alternative approach - extract and load if it's actually a different format
+        try:
+            st.info("🔄 Trying alternative loading method...")
+            
+            # Extract the zip to see what's inside
+            with zipfile.ZipFile("NEWMODEL.zip", 'r') as zip_ref:
+                file_list = zip_ref.namelist()
+                st.write(f"Files in zip: {file_list}")
+                
+                # Check for saved_model.pb (TensorFlow SavedModel)
+                if any('saved_model.pb' in f for f in file_list):
+                    # Extract to temporary directory
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_ref.extractall(temp_dir)
+                        
+                        # Find the directory containing saved_model.pb
+                        for root, dirs, files in os.walk(temp_dir):
+                            if 'saved_model.pb' in files:
+                                model = tf.keras.models.load_model(root)
+                                st.success("✅ Extracted SavedModel loaded successfully!")
+                                return model
+                
+                # Check for .h5 files
+                h5_files = [f for f in file_list if f.endswith('.h5')]
+                if h5_files:
+                    h5_file = h5_files[0]
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_ref.extract(h5_file, temp_dir)
+                        h5_path = os.path.join(temp_dir, h5_file)
+                        model = load_model(h5_path)
+                        st.success("✅ H5 model loaded successfully!")
+                        return model
+                
+                st.error("❌ Could not find compatible model format in the zip file")
+                return None
+                
+        except Exception as alt_error:
+            st.error(f"❌ Alternative loading also failed: {str(alt_error)}")
+            return None
 
 def preprocess_image(image):
     """
@@ -118,20 +127,23 @@ def make_prediction(model, img_array):
     Make prediction on the preprocessed image
     """
     try:
-        # Check if model is TFSMLayer or regular model
-        if hasattr(model, '__call__') and 'TFSMLayer' in str(type(model)):
-            # For TFSMLayer, call directly
-            prediction = model(img_array)
-            # Convert to numpy if it's a tensor
-            if hasattr(prediction, 'numpy'):
-                prediction = prediction.numpy()
-        else:
-            # For regular Keras models
-            prediction = model.predict(img_array, verbose=0)
+        # Make prediction
+        prediction = model.predict(img_array, verbose=0)
+        
+        # Handle different output formats
+        if hasattr(prediction, 'numpy'):
+            prediction = prediction.numpy()
+        
+        # Ensure prediction is in the right format
+        if len(prediction.shape) > 2:
+            prediction = prediction.reshape(prediction.shape[0], -1)
         
         return prediction
+        
     except Exception as e:
         st.error(f"❌ Error making prediction: {str(e)}")
+        st.error(f"Model type: {type(model)}")
+        st.error(f"Input shape: {img_array.shape}")
         return None
 
 def display_prediction_results(prediction):
