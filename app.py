@@ -11,7 +11,7 @@ CLASSES = ['0', 'R', 'MR', 'MRMS', 'MS', 'S']
 # Load model
 @st.cache_resource
 def load_trained_model():
-    return load_model("best_model.keras")
+    return load_model("NEWMODEL.zip")
 
 model = load_trained_model()
 
