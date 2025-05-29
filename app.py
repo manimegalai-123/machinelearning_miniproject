@@ -4,12 +4,13 @@ import zipfile
 import tempfile
 import os
 import tensorflow as tf
-import keras
+from tensorflow import keras
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 from PIL import Image
 import plotly.express as px
 import pandas as pd
+import shutil
 
 # Constants
 IMG_SIZE = 224
@@ -33,70 +34,133 @@ st.set_page_config(
 @st.cache_resource
 def load_trained_model():
     """
-    Load the trained model from NEWMODEL.zip file (TensorFlow SavedModel format)
+    Load the trained model from NEWMODEL.zip file with multiple fallback methods
     """
+    model_path = "NEWMODEL.zip"
+    
+    # Check if zip file exists
+    if not os.path.exists(model_path):
+        st.error("❌ NEWMODEL.zip file not found! Please ensure the model file is in the same directory.")
+        return None
+    
+    st.info("🔄 Loading model...")
+    
+    # Method 1: Try direct loading (for .h5 models saved as zip)
     try:
-        # Check if zip file exists
-        if not os.path.exists("NEWMODEL.zip"):
-            st.error("❌ NEWMODEL.zip file not found! Please ensure the model file is in the same directory.")
-            return None
-        
-        st.info("🔄 Loading TensorFlow SavedModel...")
-        
-        # Use TFSMLayer for TensorFlow SavedModel format as recommended in the error
-        tfsm_layer = keras.layers.TFSMLayer("NEWMODEL.zip", call_endpoint='serving_default')
-        
-        # Create a functional model wrapper
-        input_shape = (224, 224, 3)  # Based on your IMG_SIZE
-        inputs = keras.Input(shape=input_shape)
-        outputs = tfsm_layer(inputs)
-        model = keras.Model(inputs=inputs, outputs=outputs)
-        
-        st.success("✅ TensorFlow SavedModel loaded successfully!")
+        st.write("Attempting Method 1: Direct loading from zip...")
+        model = load_model(model_path)
+        st.success("✅ Model loaded successfully using direct method!")
         return model
+    except Exception as e1:
+        st.write(f"Method 1 failed: {str(e1)}")
+    
+    # Method 2: Extract and load
+    try:
+        st.write("Attempting Method 2: Extract and load...")
         
-    except Exception as e:
-        st.error(f"❌ Error loading model: {str(e)}")
-        
-        # Try alternative approach - extract and load if it's actually a different format
-        try:
-            st.info("🔄 Trying alternative loading method...")
+        with zipfile.ZipFile(model_path, 'r') as zip_ref:
+            file_list = zip_ref.namelist()
+            st.write(f"Files in zip: {file_list[:10]}...")  # Show first 10 files
             
-            # Extract the zip to see what's inside
-            with zipfile.ZipFile("NEWMODEL.zip", 'r') as zip_ref:
-                file_list = zip_ref.namelist()
-                st.write(f"Files in zip: {file_list}")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Extract all files
+                zip_ref.extractall(temp_dir)
                 
-                # Check for saved_model.pb (TensorFlow SavedModel)
-                if any('saved_model.pb' in f for f in file_list):
-                    # Extract to temporary directory
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        zip_ref.extractall(temp_dir)
-                        
-                        # Find the directory containing saved_model.pb
-                        for root, dirs, files in os.walk(temp_dir):
-                            if 'saved_model.pb' in files:
-                                model = tf.keras.models.load_model(root)
-                                st.success("✅ Extracted SavedModel loaded successfully!")
-                                return model
+                # Look for different model formats
+                extracted_items = os.listdir(temp_dir)
+                st.write(f"Extracted items: {extracted_items}")
                 
-                # Check for .h5 files
-                h5_files = [f for f in file_list if f.endswith('.h5')]
-                if h5_files:
-                    h5_file = h5_files[0]
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        zip_ref.extract(h5_file, temp_dir)
-                        h5_path = os.path.join(temp_dir, h5_file)
-                        model = load_model(h5_path)
+                # Check for SavedModel format (has saved_model.pb)
+                for item in extracted_items:
+                    item_path = os.path.join(temp_dir, item)
+                    
+                    if os.path.isdir(item_path):
+                        # Check if this directory contains saved_model.pb
+                        if 'saved_model.pb' in os.listdir(item_path):
+                            st.write(f"Found SavedModel in: {item}")
+                            model = tf.keras.models.load_model(item_path)
+                            st.success("✅ SavedModel loaded successfully!")
+                            return model
+                    
+                    # Check for .h5 files
+                    elif item.endswith('.h5'):
+                        st.write(f"Found H5 model: {item}")
+                        model = load_model(item_path)
                         st.success("✅ H5 model loaded successfully!")
                         return model
                 
-                st.error("❌ Could not find compatible model format in the zip file")
-                return None
+                # If no direct model found, check subdirectories
+                for root, dirs, files in os.walk(temp_dir):
+                    if 'saved_model.pb' in files:
+                        st.write(f"Found SavedModel in subdirectory: {root}")
+                        model = tf.keras.models.load_model(root)
+                        st.success("✅ SavedModel from subdirectory loaded successfully!")
+                        return model
+                    
+                    for file in files:
+                        if file.endswith('.h5'):
+                            h5_path = os.path.join(root, file)
+                            st.write(f"Found H5 model in subdirectory: {h5_path}")
+                            model = load_model(h5_path)
+                            st.success("✅ H5 model from subdirectory loaded successfully!")
+                            return model
                 
-        except Exception as alt_error:
-            st.error(f"❌ Alternative loading also failed: {str(alt_error)}")
-            return None
+    except Exception as e2:
+        st.write(f"Method 2 failed: {str(e2)}")
+    
+    # Method 3: Try loading without compilation
+    try:
+        st.write("Attempting Method 3: Loading without compilation...")
+        model = load_model(model_path, compile=False)
+        st.success("✅ Model loaded without compilation!")
+        return model
+    except Exception as e3:
+        st.write(f"Method 3 failed: {str(e3)}")
+    
+    # Method 4: Try TFSMLayer (for TensorFlow SavedModel in zip)
+    try:
+        st.write("Attempting Method 4: TFSMLayer approach...")
+        
+        # Extract to a permanent location for TFSMLayer
+        extract_dir = "temp_model_extract"
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        
+        with zipfile.ZipFile(model_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        
+        # Find the actual model directory
+        model_dir = None
+        for root, dirs, files in os.walk(extract_dir):
+            if 'saved_model.pb' in files:
+                model_dir = root
+                break
+        
+        if model_dir:
+            # Create a wrapper model using TFSMLayer
+            tfsm_layer = keras.layers.TFSMLayer(model_dir, call_endpoint='serving_default')
+            
+            # Create input based on expected shape
+            inputs = keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+            outputs = tfsm_layer(inputs)
+            
+            # Handle different output formats
+            if isinstance(outputs, dict):
+                # If output is a dictionary, take the first value
+                outputs = list(outputs.values())[0]
+            
+            model = keras.Model(inputs=inputs, outputs=outputs)
+            st.success("✅ TFSMLayer model loaded successfully!")
+            return model
+        
+    except Exception as e4:
+        st.write(f"Method 4 failed: {str(e4)}")
+        # Clean up
+        if os.path.exists("temp_model_extract"):
+            shutil.rmtree("temp_model_extract")
+    
+    st.error("❌ All loading methods failed. Please check your model file format.")
+    return None
 
 def preprocess_image(image):
     """
@@ -124,13 +188,17 @@ def preprocess_image(image):
 
 def make_prediction(model, img_array):
     """
-    Make prediction on the preprocessed image
+    Make prediction on the preprocessed image with improved error handling
     """
     try:
         # Make prediction
         prediction = model.predict(img_array, verbose=0)
         
         # Handle different output formats
+        if isinstance(prediction, dict):
+            # If prediction is a dictionary, get the output tensor
+            prediction = list(prediction.values())[0]
+        
         if hasattr(prediction, 'numpy'):
             prediction = prediction.numpy()
         
@@ -138,12 +206,34 @@ def make_prediction(model, img_array):
         if len(prediction.shape) > 2:
             prediction = prediction.reshape(prediction.shape[0], -1)
         
+        # Apply softmax if values don't sum to ~1 (indicating raw logits)
+        if not np.isclose(np.sum(prediction[0]), 1.0, atol=0.1):
+            prediction = tf.nn.softmax(prediction).numpy()
+        
+        # Ensure we have the right number of classes
+        if prediction.shape[1] != len(CLASSES):
+            st.warning(f"⚠️ Model output shape {prediction.shape} doesn't match expected classes {len(CLASSES)}")
+            # Pad or truncate as needed
+            if prediction.shape[1] < len(CLASSES):
+                padding = np.zeros((1, len(CLASSES) - prediction.shape[1]))
+                prediction = np.concatenate([prediction, padding], axis=1)
+            else:
+                prediction = prediction[:, :len(CLASSES)]
+        
         return prediction
         
     except Exception as e:
         st.error(f"❌ Error making prediction: {str(e)}")
         st.error(f"Model type: {type(model)}")
         st.error(f"Input shape: {img_array.shape}")
+        
+        # Try to get more info about the model
+        try:
+            st.write(f"Model input shape: {model.input_shape}")
+            st.write(f"Model output shape: {model.output_shape}")
+        except:
+            pass
+        
         return None
 
 def display_prediction_results(prediction):
@@ -251,6 +341,13 @@ def main():
     
     st.success("✅ Model loaded successfully!")
     
+    # Display model info if available
+    try:
+        st.info(f"Model input shape: {model.input_shape}")
+        st.info(f"Model output shape: {model.output_shape}")
+    except:
+        pass
+    
     # File uploader
     st.subheader("📤 Upload Wheat Leaf Image")
     uploaded_file = st.file_uploader(
@@ -295,7 +392,7 @@ def main():
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button("🔄 Analyze Another Image"):
-                            st.experimental_rerun()
+                            st.rerun()
                     
                     with col2:
                         # Option to download results
@@ -318,12 +415,14 @@ Detailed Scores:
         
         except Exception as e:
             st.error(f"❌ Error processing image: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
     
     else:
         # Show example or placeholder
         st.info("👆 Please upload a wheat leaf image to begin analysis.")
         
-        # You can add example images here if you have them
+        # Tips for best results
         st.subheader("💡 Tips for Best Results")
         st.write("""
         - Use clear, well-lit images
