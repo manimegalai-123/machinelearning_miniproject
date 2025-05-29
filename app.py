@@ -8,7 +8,7 @@ from tensorflow import keras
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 from PIL import Image
-import plotly.express as px
+import matplotlib.pyplot as plt
 import pandas as pd
 import shutil
 
@@ -272,18 +272,24 @@ def display_prediction_results(prediction):
     with col2:
         st.subheader("📊 Prediction Chart")
         
-        # Create bar chart
-        fig = px.bar(
-            results_df,
-            x='Class',
-            y='Percentage',
-            color='Percentage',
-            color_continuous_scale='RdYlGn_r',
-            title="Confidence Scores by Class",
-            labels={'Percentage': 'Confidence (%)'}
-        )
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        # Create bar chart using matplotlib
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bars = ax.bar(results_df['Class'], results_df['Percentage'], 
+                     color=plt.cm.RdYlGn_r(results_df['Percentage']/100))
+        
+        ax.set_title("Confidence Scores by Class")
+        ax.set_xlabel("Class")
+        ax.set_ylabel("Confidence (%)")
+        ax.set_ylim(0, 100)
+        
+        # Add value labels on bars
+        for bar, value in zip(bars, results_df['Percentage']):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                   f'{value:.1f}%', ha='center', va='bottom')
+        
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        st.pyplot(fig)
     
     # Risk assessment
     st.subheader("🔍 Risk Assessment")
