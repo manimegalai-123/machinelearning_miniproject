@@ -8,7 +8,6 @@ from tensorflow import keras
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import img_to_array
 from PIL import Image
-import matplotlib.pyplot as plt
 import pandas as pd
 import shutil
 
@@ -238,7 +237,7 @@ def make_prediction(model, img_array):
 
 def display_prediction_results(prediction):
     """
-    Display prediction results with confidence scores and charts
+    Display prediction results with confidence scores and visual indicators
     """
     class_idx = np.argmax(prediction)
     confidence = np.max(prediction)
@@ -249,10 +248,10 @@ def display_prediction_results(prediction):
     st.info(f"📊 **Confidence:** {confidence:.2%}")
     
     # Create two columns for detailed results
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("📈 Confidence Scores")
+        st.subheader("📈 Detailed Confidence Scores")
         
         # Create dataframe for all predictions
         results_df = pd.DataFrame({
@@ -262,34 +261,35 @@ def display_prediction_results(prediction):
             'Percentage': prediction[0] * 100
         }).sort_values('Confidence', ascending=False)
         
-        # Display as table
-        st.dataframe(
-            results_df[['Class', 'Description', 'Percentage']].round(2),
-            use_container_width=True,
-            hide_index=True
-        )
+        # Display as table with progress bars
+        for idx, row in results_df.iterrows():
+            col_class, col_desc, col_bar = st.columns([1, 2, 2])
+            with col_class:
+                st.write(f"**{row['Class']}**")
+            with col_desc:
+                st.write(row['Description'])
+            with col_bar:
+                st.progress(row['Confidence'], text=f"{row['Percentage']:.1f}%")
     
     with col2:
-        st.subheader("📊 Prediction Chart")
+        st.subheader("🏆 Top 3 Predictions")
         
-        # Create bar chart using matplotlib
-        fig, ax = plt.subplots(figsize=(10, 6))
-        bars = ax.bar(results_df['Class'], results_df['Percentage'], 
-                     color=plt.cm.RdYlGn_r(results_df['Percentage']/100))
-        
-        ax.set_title("Confidence Scores by Class")
-        ax.set_xlabel("Class")
-        ax.set_ylabel("Confidence (%)")
-        ax.set_ylim(0, 100)
-        
-        # Add value labels on bars
-        for bar, value in zip(bars, results_df['Percentage']):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                   f'{value:.1f}%', ha='center', va='bottom')
-        
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        st.pyplot(fig)
+        # Show top 3 predictions with visual indicators
+        top_3 = results_df.head(3)
+        for i, (idx, row) in enumerate(top_3.iterrows()):
+            if i == 0:
+                icon = "🥇"
+                color = "green"
+            elif i == 1:
+                icon = "🥈"
+                color = "orange"
+            else:
+                icon = "🥉"
+                color = "blue"
+            
+            st.markdown(f"{icon} **{row['Class']}** ({row['Percentage']:.1f}%)")
+            st.markdown(f"*{row['Description']}*")
+            st.write("---")
     
     # Risk assessment
     st.subheader("🔍 Risk Assessment")
